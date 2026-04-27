@@ -335,6 +335,25 @@ def _curve_stats(name: str, equity: np.ndarray,
     )
 
 
+def _holding_period_return(
+    holding: str,
+    *,
+    base: str,
+    levered: str,
+    base_start: float,
+    base_end: float,
+    levered_start: float,
+    levered_end: float,
+) -> float:
+    if holding == "CASH":
+        return 0.0
+    if holding == base:
+        return float(base_end / base_start - 1.0)
+    if holding == levered:
+        return float(levered_end / levered_start - 1.0)
+    raise ValueError(f"Unknown holding {holding!r}; expected 'CASH', {base!r}, or {levered!r}.")
+
+
 def _decide_backtest(
     base: str,
     levered: str,
@@ -360,8 +379,6 @@ def _decide_backtest(
     ftd_s = follow_through_days(base_df)
     max_rsi_20_s = rsi_s.rolling(20).max()
     ftd_in_5_s = ftd_s.rolling(5).sum() > 0
-    base_ret_s = close.pct_change()
-    lev_ret_s = lev_df["Close"].pct_change()
 
     idx_all = base_df.index.intersection(lev_df.index)
     idx = idx_all[(idx_all >= start_ts) & (idx_all <= end_ts)]
@@ -411,15 +428,42 @@ def _decide_backtest(
         )
         holdings_tact.append(new_tact)
 
-        def _ret(holding: str) -> float:
-            if holding == "CASH":
-                return 0.0
-            if holding == base:
-                return float(base_ret_s.loc[cur_d])
-            return float(lev_ret_s.loc[cur_d])
+        # Decisions made at prev_d close are executable at cur_d open. The prior
+        # holding owns the overnight gap; the newly selected holding owns open→close.
+        base_prev_close = float(base_df["Close"].loc[prev_d])
+        base_cur_open = float(base_df["Open"].loc[cur_d])
+        base_cur_close = float(base_df["Close"].loc[cur_d])
+        lev_prev_close = float(lev_df["Close"].loc[prev_d])
+        lev_cur_open = float(lev_df["Open"].loc[cur_d])
+        lev_cur_close = float(lev_df["Close"].loc[cur_d])
 
-        eq_macro.append(eq_macro[-1] * (1 + _ret(new_macro)))
-        eq_tact.append(eq_tact[-1] * (1 + _ret(new_tact)))
+        macro_overnight = _holding_period_return(
+            holdings_macro[-2],
+            base=base, levered=levered,
+            base_start=base_prev_close, base_end=base_cur_open,
+            levered_start=lev_prev_close, levered_end=lev_cur_open,
+        )
+        macro_intraday = _holding_period_return(
+            new_macro,
+            base=base, levered=levered,
+            base_start=base_cur_open, base_end=base_cur_close,
+            levered_start=lev_cur_open, levered_end=lev_cur_close,
+        )
+        tact_overnight = _holding_period_return(
+            holdings_tact[-2],
+            base=base, levered=levered,
+            base_start=base_prev_close, base_end=base_cur_open,
+            levered_start=lev_prev_close, levered_end=lev_cur_open,
+        )
+        tact_intraday = _holding_period_return(
+            new_tact,
+            base=base, levered=levered,
+            base_start=base_cur_open, base_end=base_cur_close,
+            levered_start=lev_cur_open, levered_end=lev_cur_close,
+        )
+
+        eq_macro.append(eq_macro[-1] * (1 + macro_overnight) * (1 + macro_intraday))
+        eq_tact.append(eq_tact[-1] * (1 + tact_overnight) * (1 + tact_intraday))
 
     # Benchmarks
     lev_prices = lev_df["Close"].loc[idx]

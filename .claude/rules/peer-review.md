@@ -1,0 +1,17 @@
+# Peer Code Review
+
+When reviewing a pull request or code change, evaluate each dimension in order, per [Google's Engineering Practices](https://google.github.io/eng-practices/review/reviewer/looking-for.html):
+
+- **Design**: The change fits the existing architecture (schema, state machines, client wrappers) and belongs in this repository at this time.
+- **Functionality**: The code does what the PR claims; edge cases and concurrency risks are addressed. Breaking schema changes (renamed enums, new required fields) include a migration path or explicit confirmation that no existing data is affected.
+- **Complexity**: The solution is no more complex than the current problem requires. Flag over-engineering — solutions built for hypothetical future needs rather than today's.
+- **Tests**: Production code has accompanying tests that exercise real code paths (pagination loops, operation polling, error propagation). Tests will catch actual regressions, not merely assert that an error occurred.
+- **Naming and Comments**: Names are clear, specific, and consistent with repository conventions. Comments explain *why* (motivation, constraint, invariant), not *what* (restatement of the code).
+- **Style**: Handwritten Go follows the repository Go idiom policy (Uber baseline + repo overrides). Use `Nit:` for minor suggestions; do not block approval on style alone unless it violates an explicit repository rule.
+- **Documentation**: User-facing changes (schema fields, API contracts, new resource types) update relevant docs. Generated files (e.g., `generated_payload_types.go`) are regenerated from source via `make generate-types`, not hand-edited.
+
+**Reviewer duties:**
+- Read every line of the diff — do not skim.
+- Consider broader system context: state machine transitions, discriminator mappings, backward compatibility, data migration.
+- Acknowledge good practices alongside problems.
+- Approve only changes that leave code health equal to or better than before.

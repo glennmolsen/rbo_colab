@@ -1,0 +1,9 @@
+# Go Idioms and Readability
+
+- Use the [Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md) as the default baseline for handwritten Go code.
+- Keep interfaces at point of use, avoid pointers to interfaces, and use compile-time interface checks where they prevent accidental API drift.
+- Handle errors explicitly: prefer early returns, wrap with `%w` to preserve causes, and avoid `panic` in package/library code paths.
+- Copy slices and maps at boundaries when ownership should not leak; prefer `nil` slices when representing empty results.
+- Avoid mutable package globals and avoid `init()` unless no explicit initialization path is viable.
+- Keep variable scope tight and avoid fire-and-forget goroutines without explicit lifecycle, cancellation, and error handling.
+- If repository-specific guidance conflicts with generic style guidance, follow repository policy first.
