@@ -1,10 +1,13 @@
 """Plot a backtest equity curve produced by decision.py.
 
+Renders four curves on a shared log-y equity axis plus a drawdown panel:
+  1. Tactical strategy  (levered ↔ base ↔ cash)
+  2. Macro strategy     (levered ↔ cash)
+  3. Buy-and-hold levered
+  4. Buy-and-hold base
+
 Usage:
     python3 plot_backtest.py [curve_csv] [--out PATH] [--show]
-
-Default input: curve.csv in the repo root.
-Default output: backtest.png next to the input.
 """
 
 from __future__ import annotations
@@ -14,8 +17,16 @@ from pathlib import Path
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
+
+
+SERIES = [
+    # (csv column, display label, color, linewidth, zorder)
+    ("strategy_tactical", "Tactical (lev↔base↔cash)", "#1f6feb", 1.8, 5),
+    ("strategy_macro",    "Macro (lev↔cash)",         "#2ca02c", 1.6, 4),
+    ("buy_hold_levered",  "Buy-hold levered",         "#d1464a", 1.3, 3),
+    ("buy_hold_base",     "Buy-hold base",            "#888888", 1.3, 2),
+]
 
 
 def _max_drawdown_series(equity: pd.Series) -> pd.Series:
@@ -23,74 +34,77 @@ def _max_drawdown_series(equity: pd.Series) -> pd.Series:
     return equity / peaks - 1.0
 
 
-def _shade_cash_spans(ax, df: pd.DataFrame) -> None:
-    """Shade contiguous CASH stretches so blackout exits are visible."""
-    in_cash = df["holding"] == "CASH"
+def _cagr(equity: pd.Series) -> float:
+    years = (equity.index[-1] - equity.index[0]).days / 365.25
+    if years <= 0:
+        return float("nan")
+    return (equity.iloc[-1] / equity.iloc[0]) ** (1 / years) - 1
+
+
+def _shade_cash_spans(ax, df: pd.DataFrame, col: str, color: str, label: str) -> None:
+    """Shade contiguous CASH stretches for a given holding column."""
+    if col not in df.columns:
+        return
+    in_cash = df[col] == "CASH"
     if not in_cash.any():
         return
-    # Find runs of consecutive True
     runs = in_cash.ne(in_cash.shift()).cumsum()
     first_label_used = False
     for _, group in df[in_cash].groupby(runs[in_cash]):
-        label = "In cash (blackout)" if not first_label_used else None
-        ax.axvspan(group.index[0], group.index[-1], color="#f0c36d", alpha=0.25, label=label)
+        lbl = label if not first_label_used else None
+        ax.axvspan(group.index[0], group.index[-1], color=color, alpha=0.15, label=lbl)
         first_label_used = True
 
 
 def plot(csv_path: Path, out_path: Path, show: bool) -> None:
     df = pd.read_csv(csv_path, parse_dates=["date"]).set_index("date").sort_index()
 
-    strat = df["strategy_equity"]
-    bh = df["buy_hold_levered"]
-    strat_dd = _max_drawdown_series(strat) * 100
-    bh_dd = _max_drawdown_series(bh) * 100
-
-    start, end = df.index[0], df.index[-1]
-    years = (end - start).days / 365.25
-    strat_cagr = (strat.iloc[-1] / strat.iloc[0]) ** (1 / years) - 1
-    bh_cagr = (bh.iloc[-1] / bh.iloc[0]) ** (1 / years) - 1
-
     fig, (ax_eq, ax_dd) = plt.subplots(
-        2, 1, figsize=(12, 7), sharex=True,
+        2, 1, figsize=(13, 8), sharex=True,
         gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08},
     )
 
-    # --- Equity panel (log y) ---
-    _shade_cash_spans(ax_eq, df)
-    ax_eq.plot(strat.index, strat.values, color="#1f6feb", linewidth=1.8,
-               label=f"Strategy (CAGR {strat_cagr*100:.1f}%, "
-                     f"MDD {strat_dd.min():.1f}%)")
-    ax_eq.plot(bh.index, bh.values, color="#d1464a", linewidth=1.4, alpha=0.85,
-               label=f"Buy & hold QLD (CAGR {bh_cagr*100:.1f}%, "
-                     f"MDD {bh_dd.min():.1f}%)")
+    # Shade tactical cash periods (macro cash periods overlap and would clutter)
+    _shade_cash_spans(ax_eq, df, "holding_tactical", "#f0c36d", "Tactical in cash")
+
+    # Equity curves (log y)
+    for col, label, color, lw, z in SERIES:
+        if col not in df.columns:
+            continue
+        s = df[col].dropna()
+        cagr = _cagr(s)
+        mdd = _max_drawdown_series(s).min() * 100
+        ax_eq.plot(s.index, s.values, color=color, linewidth=lw, zorder=z,
+                   label=f"{label}  (CAGR {cagr*100:.1f}%, MDD {mdd:.1f}%, "
+                         f"final ${s.iloc[-1]:,.0f})")
+
     ax_eq.set_yscale("log")
     ax_eq.set_ylabel("Equity ($, log scale)")
+    start, end = df.index[0], df.index[-1]
     ax_eq.set_title(
-        f"Leverage strategy vs buy-and-hold QLD  |  "
-        f"{start.date()} → {end.date()}  |  "
-        f"${strat.iloc[0]:,.0f} → ${strat.iloc[-1]:,.0f}"
+        f"Strategy comparison  |  {start.date()} → {end.date()}  |  "
+        f"start ${df['strategy_tactical'].iloc[0]:,.0f}"
     )
     ax_eq.grid(True, which="both", axis="y", alpha=0.25)
     ax_eq.grid(True, which="major", axis="x", alpha=0.25)
-    ax_eq.legend(loc="upper left", framealpha=0.95)
+    ax_eq.legend(loc="upper left", framealpha=0.95, fontsize=9)
 
-    # --- Drawdown panel ---
-    ax_dd.fill_between(strat_dd.index, strat_dd.values, 0,
-                       color="#1f6feb", alpha=0.35, label="Strategy")
-    ax_dd.fill_between(bh_dd.index, bh_dd.values, 0,
-                       color="#d1464a", alpha=0.25, label="Buy & hold QLD")
+    # Drawdown panel
+    for col, label, color, lw, z in SERIES:
+        if col not in df.columns:
+            continue
+        dd = _max_drawdown_series(df[col].dropna()) * 100
+        ax_dd.plot(dd.index, dd.values, color=color, linewidth=1.0, zorder=z)
+        ax_dd.fill_between(dd.index, dd.values, 0, color=color, alpha=0.12, zorder=z)
     ax_dd.axhline(0, color="black", linewidth=0.6)
     ax_dd.set_ylabel("Drawdown (%)")
     ax_dd.set_xlabel("Date")
     ax_dd.grid(True, alpha=0.25)
-    ax_dd.legend(loc="lower left", framealpha=0.95)
 
-    # Nicer date ticks
     ax_dd.xaxis.set_major_locator(mdates.YearLocator())
     ax_dd.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
 
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=140)
+    fig.savefig(out_path, dpi=140, bbox_inches="tight")
     print(f"Wrote {out_path}")
     if show:
         plt.show()
